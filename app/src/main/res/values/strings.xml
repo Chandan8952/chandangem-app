@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">ChandanGem</string>
+    <string name="author_name">Chandan Kumar</string>
+    <string name="voice_assistant_title">Voice Assistant</string>
+    <string name="terminal_title">Terminal &amp; Shell Manager</string>
+    <string name="mcp_title">MCP Protocols</string>
+    <string name="multi_agent_chat">Multi-Agent System</string>
+</resources>

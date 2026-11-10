@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.ChandanGem" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@color/primary_dark_background</item>
+        <item name="android:navigationBarColor">@color/primary_dark_background</item>
+        <item name="android:windowBackground">@color/primary_dark_background</item>
+    </style>
+</resources>
