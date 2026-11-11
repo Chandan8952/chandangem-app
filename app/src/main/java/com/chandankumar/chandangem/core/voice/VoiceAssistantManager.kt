@@ -34,6 +34,13 @@ class VoiceAssistantManager(
     private val _isHandsFreeEnabled = MutableStateFlow(false)
     val isHandsFreeEnabled: StateFlow<Boolean> = _isHandsFreeEnabled.asStateFlow()
 
+    /**
+     * When true, bypasses AudioFocus request and avoids continuous mic locking,
+     * allowing YouTube/Spotify music to keep playing in the background without interruptions.
+     */
+    var audioFocusBypass: Boolean = true
+    var pushToTalkOnly: Boolean = false
+
     private var voiceLoopJob: Job? = null
     var onSpeechQueryHandler: (suspend (String) -> String)? = null
 
@@ -108,10 +115,11 @@ class VoiceAssistantManager(
         _voiceState.value = VoiceState.SPEAKING
         ttsManager.speak(response) {
             _voiceState.value = VoiceState.IDLE
-            if (_isHandsFreeEnabled.value) {
+            // If pushToTalkOnly or audioFocusBypass is active with music priority, do not automatically seize mic
+            if (_isHandsFreeEnabled.value && !pushToTalkOnly) {
                 scope.launch {
                     delay(500) // Brief conversational pause before listening again
-                    if (_isHandsFreeEnabled.value) {
+                    if (_isHandsFreeEnabled.value && !pushToTalkOnly) {
                         Log.d(TAG, "Hands-free loop: Resuming listening...")
                         sttManager.startListening()
                     }

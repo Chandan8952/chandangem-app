@@ -1,6 +1,7 @@
 package com.chandankumar.chandangem.core.voice
 
 import android.content.Context
+import android.media.AudioAttributes
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
@@ -43,6 +44,11 @@ class TextToSpeechManager(
                 onInitComplete?.invoke(false)
             } else {
                 isInitialized = true
+                val attrs = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+                tts?.setAudioAttributes(attrs)
                 tts?.setSpeechRate(1.05f)
                 tts?.setPitch(1.0f)
                 setupProgressListener()
