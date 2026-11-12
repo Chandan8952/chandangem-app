@@ -1,15 +1,11 @@
 {
-  "version_code": 136,
-  "version_name": "1.2.4",
+  "version_code": 137,
+  "version_name": "1.2.5",
   "min_supported_version_code": 1,
   "changelog": [
-    "Fixed: 'Node.js is required in the local terminal to run browser extensions' error on the plugin pages",
-    "The plugin host now starts with the Node.js inside the Ubuntu container (through proot), so plugins load their tools and skills",
-    "Fixed: Stdio MCP servers (npx/node based) now get the container PATH instead of Termux paths, so they can start",
-    "App name now shows as CodeNexus in the drawer and in the settings help texts, and the accessibility service name matches Android Settings",
-    "Every CodeNexus fix is re-applied automatically after the daily upstream sync",
-    "Launcher icon is the original AntiGem prism gem, app name stays CodeNexus",
-    "Updates install over the previous version without uninstalling (stable signing key)"
+    "Upstream AntiGem update merged (9b5de62)",
+    "release(v1.1.12): upgrade Jarvis with Antigravity neural speech and Hindi support",
+    "CodeNexus name and the original AntiGem prism icon are preserved"
   ],
   "is_critical": true
 }
