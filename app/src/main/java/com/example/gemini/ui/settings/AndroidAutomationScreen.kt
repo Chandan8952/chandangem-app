@@ -28,6 +28,8 @@ import com.example.gemini.data.automation.AndroidAutomation
 import com.example.gemini.theme.QuotaGreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.ui.res.stringResource
+import com.example.gemini.R
 
 /**
  * Android Automation has no on/off switch: it is "on" once the user grants the Accessibility service here,
@@ -90,8 +92,8 @@ fun AndroidAutomationScreen(cardBg: Color, cardBorder: BorderStroke, onOpenAdbCo
 
         // 1. Accessibility service (required)
         StepCard(1, "Accessibility service", if (running) "Allowed" else "Required", cardBg, cardBorder, badgeColor = if (running) QuotaGreen else Amber) {
-            Hint("Reads the screen, taps, swipes, types and takes screenshots. In Accessibility settings, open \"AntiGem Android Automation\" (it may be under Installed apps or Downloaded apps) and turn it on.")
-            CheckRow("AntiGem Android Automation", running)
+            Hint("Reads the screen, taps, swipes, types and takes screenshots. In Accessibility settings, open \"${stringResource(R.string.accessibility_service_name)}\" (it may be under Installed apps or Downloaded apps) and turn it on.")
+            CheckRow(stringResource(R.string.accessibility_service_name), running)
             if (!running) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { AndroidAutomation.openAccessibilitySettings(context) }) { Text("Open Accessibility") }

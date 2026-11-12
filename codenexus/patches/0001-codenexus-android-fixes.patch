@@ -1,0 +1,337 @@
+diff --git a/app/src/main/java/com/example/gemini/ui/browser/BrowserExtensionManager.kt b/app/src/main/java/com/example/gemini/ui/browser/BrowserExtensionManager.kt
+--- a/app/src/main/java/com/example/gemini/ui/browser/BrowserExtensionManager.kt
++++ b/app/src/main/java/com/example/gemini/ui/browser/BrowserExtensionManager.kt
+@@ -193,20 +193,11 @@
+                 throw IllegalStateException(e.message ?: "The browser-plugin host could not start on the server", e)
+             }
+         } else if (hostProcess?.isAlive != true) {
+-            val node = File(LocalEnvironmentManager.getBinDir(context), "node")
+-            if (!node.canExecute()) throw IllegalStateException("Node.js is required in the local terminal to run browser extensions")
+-            val command = mutableListOf(node.absolutePath, "--experimental-vm-modules", runtimeFile(context).absolutePath,
+-                "--serve", "--port", hostPort().toString(), "--root", File(context.filesDir, "browser-extensions").absolutePath,
+-                "--device-id", deviceId(), "--bridge-url", "http://127.0.0.1:${com.example.gemini.data.remote.AndroidLocalBridgeServer.instance.boundPort}")
+-            getExtensionsDirectories(context).filter { it != File(context.filesDir, "browser-extensions") }.forEach {
+-                if (it.isDirectory) command.addAll(listOf("--extra-root", it.absolutePath))
+-            }
++            val launch = planHostLaunch(context)
++                ?: throw IllegalStateException("Node.js is required in the local terminal to run browser extensions")
++            val command = launch.command
+             val builder = ProcessBuilder(command).directory(LocalEnvironmentManager.getHomeDir(context)).redirectErrorStream(true)
+-            builder.environment().putAll(mapOf("HOME" to LocalEnvironmentManager.getHomeDir(context).absolutePath,
+-                "PREFIX" to LocalEnvironmentManager.getPrefixDir(context).absolutePath,
+-                "PATH" to "${LocalEnvironmentManager.getBinDir(context).absolutePath}:/system/bin",
+-                "TMPDIR" to LocalEnvironmentManager.getTmpDir(context).absolutePath,
+-                "AGY_PARENT_PID" to android.os.Process.myPid().toString()))
++            builder.environment().putAll(launch.env)
+             // Everything the host prints, plus its exit code, goes to ~/extension-host.log so a failing phone can be diagnosed.
+             val logFile = File(LocalEnvironmentManager.getHomeDir(context), "extension-host.log")
+             synchronized(hostTail) { hostTail.clear() }
+@@ -245,6 +236,105 @@
+         throw IllegalStateException("Extension host did not start in time")
+     } }
+ 
++    /** How the extension host is started: with the app's own Node.js, or with the Node.js inside the Linux container. */
++    private class HostLaunch(val command: List<String>, val env: Map<String, String>)
++
++    /**
++     * Builds the command that starts the plugin host.
++     *
++     * On Termux builds Node.js sits in the app's own prefix, so the host starts directly. On Android builds Node.js
++     * only exists inside the Ubuntu container (a glibc binary), so the host is started there through proot: the app's
++     * runtime and plugin folders are bound into the container and the host keeps talking to the app over 127.0.0.1.
++     */
++    private fun planHostLaunch(context: Context): HostLaunch? {
++        val runtime = runtimeFile(context)
++        val extensionsRoot = File(context.filesDir, "browser-extensions")
++        val extraRoots = getExtensionsDirectories(context).filter { it != extensionsRoot && it.isDirectory }
++        val bridgeUrl = "http://127.0.0.1:${com.example.gemini.data.remote.AndroidLocalBridgeServer.instance.boundPort}"
++
++        val node = File(LocalEnvironmentManager.getBinDir(context), "node")
++        if (node.canExecute()) {
++            val command = mutableListOf(node.absolutePath, "--experimental-vm-modules", runtime.absolutePath,
++                "--serve", "--port", hostPort().toString(), "--root", extensionsRoot.absolutePath,
++                "--device-id", deviceId(), "--bridge-url", bridgeUrl)
++            extraRoots.forEach { command.addAll(listOf("--extra-root", it.absolutePath)) }
++            return HostLaunch(command, mapOf(
++                "HOME" to LocalEnvironmentManager.getHomeDir(context).absolutePath,
++                "PREFIX" to LocalEnvironmentManager.getPrefixDir(context).absolutePath,
++                "PATH" to "${LocalEnvironmentManager.getBinDir(context).absolutePath}:/system/bin",
++                "TMPDIR" to LocalEnvironmentManager.getTmpDir(context).absolutePath,
++                "AGY_PARENT_PID" to android.os.Process.myPid().toString()))
++        }
++
++        // Android build: Node.js lives inside the Ubuntu container.
++        if (LocalEnvironmentManager.isTermuxPackage(context) || !LocalEnvironmentManager.isUbuntuInstalled(context)) return null
++        val ubuntuDir = LocalEnvironmentManager.getUbuntuRootDir(context)
++        val guestNode = File(ubuntuDir, "usr/bin/node")
++        if (!guestNode.exists()) return null
++
++        val files = context.filesDir.absolutePath
++        val home = LocalEnvironmentManager.getHomeDir(context)
++        // Host folder -> guest folder. The guest paths stay under /root, which the host's own file sandbox allows.
++        val mounts = listOf(
++            File(files, "browser-runtime") to "/root/antigem-runtime",
++            File(files, "browser-extensions") to "/root/antigem-extensions",
++            File(files, "extensions") to "/root/antigem-ext",
++            File(files, "projects") to "/root/antigem-projects",
++            home to "/root/workspace")
++        val bound = mounts.filter { it.first.exists() }
++        fun guestPath(file: File): String? {
++            val path = file.absolutePath
++            val mount = bound.filter { path == it.first.absolutePath || path.startsWith(it.first.absolutePath + File.separator) }
++                .maxByOrNull { it.first.absolutePath.length } ?: return null
++            return mount.second + path.removePrefix(mount.first.absolutePath)
++        }
++        val guestRuntime = guestPath(runtime.parentFile!!)?.plus("/${runtime.name}") ?: return null
++        val guestExtensions = guestPath(extensionsRoot) ?: return null
++
++        val prootTmpDir = File(files, "tmp").apply { mkdirs() }
++        val shmDir = File(files, "shm").apply { mkdirs() }
++        val command = mutableListOf(
++            LocalEnvironmentManager.getProotBinaryPath(context),
++            "--kill-on-exit", "--link2symlink", "--sysvipc",
++            "--kernel-release=\\Linux\\localhost\\6.1.0\\2026.08\\aarch64\\localdomain\\-1\\",
++            "-L", "--change-id=0:0",
++            "--rootfs=${ubuntuDir.absolutePath}", "--cwd=/root",
++            "--bind=/dev", "--bind=/proc", "--bind=/sys", "--bind=/dev/urandom:/dev/random",
++            "--bind=${shmDir.absolutePath}:/dev/shm", "--bind=${prootTmpDir.absolutePath}:/tmp")
++        LocalEnvironmentManager.setupFakeSysdata(context).forEach { (fakeFile, guestTarget) ->
++            command.add("--bind=${fakeFile.absolutePath}:$guestTarget")
++        }
++        listOf("/apex", "/odm", "/product", "/system", "/system_ext", "/vendor",
++            "/plat_property_contexts", "/property_contexts").forEach { hostPath ->
++            if (File(hostPath).exists()) { command.add("-b"); command.add(hostPath) }
++        }
++        if (File("/storage").exists() && File("/storage").canRead()) { command.add("-b"); command.add("/storage") }
++        if (File("/storage/emulated/0").exists()) { command.add("-b"); command.add("/storage/emulated/0:/sdcard") }
++        else if (File("/sdcard").exists()) { command.add("-b"); command.add("/sdcard") }
++        bound.forEach { (host, guest) -> command.add("--bind=${host.absolutePath}:$guest") }
++
++        command.addAll(listOf("/usr/bin/env", "-i", "HOME=/root", "USER=root", "LOGNAME=root",
++            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
++            "TERM=xterm-256color", "LANG=C.UTF-8", "TMPDIR=/tmp",
++            "AGY_PARENT_PID=${android.os.Process.myPid()}",
++            "/usr/bin/node", "--experimental-vm-modules", guestRuntime,
++            "--serve", "--port", hostPort().toString(), "--root", guestExtensions,
++            "--device-id", deviceId(), "--bridge-url", bridgeUrl))
++        extraRoots.forEach { dir ->
++            val guest = guestPath(dir) ?: dir.absolutePath.takeIf { it.startsWith("/sdcard/") }
++            if (guest != null) command.addAll(listOf("--extra-root", guest))
++        }
++        return HostLaunch(command, mapOf(
++            "HOME" to "/root",
++            "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
++            "TMPDIR" to "/tmp",
++            "PROOT_LOADER" to LocalEnvironmentManager.getProotLoaderPath(context),
++            "PROOT_TMP_DIR" to prootTmpDir.absolutePath,
++            "LD_LIBRARY_PATH" to "$files/lib:$files/bin",
++            "DEBIAN_FRONTEND" to "noninteractive",
++            "AGY_PARENT_PID" to android.os.Process.myPid().toString()))
++    }
++
+     suspend fun request(path: String, body: JSONObject = JSONObject()) = withContext(Dispatchers.IO) {
+         ensureHost()
+         hostRequest(path, body)
+diff --git a/app/src/main/java/com/example/gemini/data/remote/services/AgyPluginService.kt b/app/src/main/java/com/example/gemini/data/remote/services/AgyPluginService.kt
+--- a/app/src/main/java/com/example/gemini/data/remote/services/AgyPluginService.kt
++++ b/app/src/main/java/com/example/gemini/data/remote/services/AgyPluginService.kt
+@@ -194,7 +194,11 @@
+                             envMap["LD_PRELOAD"] = "/data/data/com.termux/files/usr/lib/libtermux-exec.so"
+                         }
+                         if (!envMap.containsKey("PATH")) {
+-                            envMap["PATH"] = "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin"
++                            envMap["PATH"] = if (java.io.File("/data/data/com.termux/files/usr/lib/libtermux-exec.so").exists())
++                                "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin"
++                            else
++                                // Ubuntu container build: the servers run inside the container, so they need its PATH
++                                "/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                         }
+                     }
+ 
+diff --git a/app/src/main/java/com/example/gemini/data/agent/agy/AgyMcpManager.kt b/app/src/main/java/com/example/gemini/data/agent/agy/AgyMcpManager.kt
+--- a/app/src/main/java/com/example/gemini/data/agent/agy/AgyMcpManager.kt
++++ b/app/src/main/java/com/example/gemini/data/agent/agy/AgyMcpManager.kt
+@@ -294,11 +294,17 @@
+                             // Ensure Termux stdio binaries (npx, python3, etc.) have proper loader and PATH on Android.
+                             // A server runs the MCP on its own Linux: those Termux paths would break it there.
+                             if (!AuthPreferences.currentRemoteMode) {
+-                                if (!envMap.containsKey("LD_PRELOAD")) {
+-                                    envMap["LD_PRELOAD"] = "/data/data/com.termux/files/usr/lib/libtermux-exec.so"
+-                                }
+-                                if (!envMap.containsKey("PATH")) {
+-                                    envMap["PATH"] = "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin"
++                                val termuxExec = java.io.File("/data/data/com.termux/files/usr/lib/libtermux-exec.so").exists()
++                                if (termuxExec) {
++                                    if (!envMap.containsKey("LD_PRELOAD")) {
++                                        envMap["LD_PRELOAD"] = "/data/data/com.termux/files/usr/lib/libtermux-exec.so"
++                                    }
++                                    if (!envMap.containsKey("PATH")) {
++                                        envMap["PATH"] = "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin"
++                                    }
++                                } else if (!envMap.containsKey("PATH")) {
++                                    // Ubuntu container build: the servers run inside the container, so they need its PATH
++                                    envMap["PATH"] = "/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                                 }
+                             }
+                             if (envMap.isNotEmpty()) {
+diff --git a/app/src/main/java/com/example/gemini/ui/drawer/ChatHistoryDrawer.kt b/app/src/main/java/com/example/gemini/ui/drawer/ChatHistoryDrawer.kt
+--- a/app/src/main/java/com/example/gemini/ui/drawer/ChatHistoryDrawer.kt
++++ b/app/src/main/java/com/example/gemini/ui/drawer/ChatHistoryDrawer.kt
+@@ -82,6 +82,8 @@
+ import kotlinx.coroutines.launch
+ import java.text.SimpleDateFormat
+ import java.util.*
++import androidx.compose.ui.res.stringResource
++import com.example.gemini.R
+ 
+ @Composable
+ fun ChatHistoryDrawer(
+@@ -445,7 +447,7 @@
+             },
+             title = {
+                 Text(
+-                    text = "Exit AntiGem?",
++                    text = "Exit CodeNexus?",
+                     style = MaterialTheme.typography.titleMedium,
+                     fontWeight = FontWeight.Bold,
+                     color = MaterialTheme.colorScheme.onSurface
+@@ -602,7 +604,7 @@
+                 verticalAlignment = Alignment.CenterVertically
+             ) {
+                 Text(
+-                    text = "AntiGem",
++                    text = stringResource(R.string.app_name),
+                     fontSize = 19.sp,
+                     fontWeight = FontWeight.Bold,
+                     letterSpacing = (-0.3).sp,
+diff --git a/app/src/main/java/com/example/gemini/ui/settings/AndroidAutomationScreen.kt b/app/src/main/java/com/example/gemini/ui/settings/AndroidAutomationScreen.kt
+--- a/app/src/main/java/com/example/gemini/ui/settings/AndroidAutomationScreen.kt
++++ b/app/src/main/java/com/example/gemini/ui/settings/AndroidAutomationScreen.kt
+@@ -28,6 +28,8 @@
+ import com.example.gemini.theme.QuotaGreen
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
++import androidx.compose.ui.res.stringResource
++import com.example.gemini.R
+ 
+ /**
+  * Android Automation has no on/off switch: it is "on" once the user grants the Accessibility service here,
+@@ -90,8 +92,8 @@
+ 
+         // 1. Accessibility service (required)
+         StepCard(1, "Accessibility service", if (running) "Allowed" else "Required", cardBg, cardBorder, badgeColor = if (running) QuotaGreen else Amber) {
+-            Hint("Reads the screen, taps, swipes, types and takes screenshots. In Accessibility settings, open \"AntiGem Android Automation\" (it may be under Installed apps or Downloaded apps) and turn it on.")
+-            CheckRow("AntiGem Android Automation", running)
++            Hint("Reads the screen, taps, swipes, types and takes screenshots. In Accessibility settings, open \"${stringResource(R.string.accessibility_service_name)}\" (it may be under Installed apps or Downloaded apps) and turn it on.")
++            CheckRow(stringResource(R.string.accessibility_service_name), running)
+             if (!running) {
+                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                     Button(onClick = { AndroidAutomation.openAccessibilitySettings(context) }) { Text("Open Accessibility") }
+diff --git a/app/src/main/java/com/example/gemini/ui/settings/AdbConnectScreen.kt b/app/src/main/java/com/example/gemini/ui/settings/AdbConnectScreen.kt
+--- a/app/src/main/java/com/example/gemini/ui/settings/AdbConnectScreen.kt
++++ b/app/src/main/java/com/example/gemini/ui/settings/AdbConnectScreen.kt
+@@ -123,7 +123,7 @@
+                 when {
+                     !devOptionsOn -> "Open About phone and tap Build number 7 times to unlock Developer options."
+                     !wirelessOn -> "In Developer options, turn on Wireless debugging. Your phone must be on Wi-Fi."
+-                    else -> "Ready. Wireless debugging uses a new port each time it turns on; AntiGem finds it for you."
++                    else -> "Ready. Wireless debugging uses a new port each time it turns on; CodeNexus finds it for you."
+                 }
+             )
+             if (!wirelessReady) OutlinedButton(onClick = { AdbConnectManager.openWirelessDebuggingSettings(context) }) {
+@@ -137,7 +137,7 @@
+             if (!notificationsOn) {
+                 Surface(shape = RoundedCornerShape(10.dp), color = Amber.copy(alpha = 0.12f)) {
+                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+-                        Text("Notifications are off for AntiGem. The pairing code is entered in a notification, so allow them first.", fontSize = 12.sp)
++                        Text("Notifications are off for CodeNexus. The pairing code is entered in a notification, so allow them first.", fontSize = 12.sp)
+                         TextButton(onClick = {
+                             val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                                 Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+@@ -202,7 +202,7 @@
+             Row(verticalAlignment = Alignment.CenterVertically) {
+                 Column(Modifier.weight(1f)) {
+                     Text("Reconnect automatically", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+-                    Hint("When Wireless debugging turns on again, for example after Wi-Fi reconnects, AntiGem finds the new port and connects while it's running.")
++                    Hint("When Wireless debugging turns on again, for example after Wi-Fi reconnects, CodeNexus finds the new port and connects while it's running.")
+                 }
+                 Spacer(Modifier.width(8.dp))
+                 Switch(checked = state.autoReconnect, onCheckedChange = AdbConnectManager::setAutoReconnect)
+@@ -300,7 +300,7 @@
+         listOf(
+             "Tap Start pairing. A notification appears and Wireless debugging opens.",
+             "Tap \"Pair device with pairing code\".",
+-            "Pull down the notification shade and type the 6-digit code into the AntiGem notification.",
++            "Pull down the notification shade and type the 6-digit code into the CodeNexus notification.",
+         ).forEachIndexed { i, text -> Hint("${i + 1}. $text") }
+         Text(
+             "Stay in Settings while you do this. Android closes the pairing dialog as soon as you leave it.",
+diff --git a/app/src/main/java/com/example/gemini/data/adb/AdbConnectManager.kt b/app/src/main/java/com/example/gemini/data/adb/AdbConnectManager.kt
+--- a/app/src/main/java/com/example/gemini/data/adb/AdbConnectManager.kt
++++ b/app/src/main/java/com/example/gemini/data/adb/AdbConnectManager.kt
+@@ -436,7 +436,7 @@
+         val device = _state.value.connectedDevice?.serial
+         postResult(
+             if (connected) "ADB connected" else "ADB paired",
+-            if (connected) "Connected to $device. Use adb in the terminal." else "Paired. Open AntiGem → Settings → ADB Connect to connect."
++            if (connected) "Connected to $device. Use adb in the terminal." else "Paired. Open CodeNexus → Settings → ADB Connect to connect."
+         )
+         if (!connected) report("Paired, but couldn't find the Wireless debugging port yet. Tap Connect.", true)
+         if (pairingServiceRunning) stopPairing(context)
+diff --git a/app/src/main/java/com/example/gemini/data/automation/AndroidAutomation.kt b/app/src/main/java/com/example/gemini/data/automation/AndroidAutomation.kt
+--- a/app/src/main/java/com/example/gemini/data/automation/AndroidAutomation.kt
++++ b/app/src/main/java/com/example/gemini/data/automation/AndroidAutomation.kt
+@@ -39,7 +39,7 @@
+         "outward-facing: uninstalling, deleting, sending messages, payments, changing security settings. " +
+         "If a tool says a permission or ADB is missing, tell the user exactly what to do and stop."
+ 
+-    private const val ADB_NEEDED = "This needs ADB. Ask the user to open AntiGem → Settings → ADB Connect and connect " +
++    private const val ADB_NEEDED = "This needs ADB. Ask the user to open CodeNexus → Settings → ADB Connect and connect " +
+         "(pair once, with Wireless debugging on), then try again."
+ 
+     /** Elements of the latest android_get_ui_tree, by id. */
+@@ -63,8 +63,8 @@
+     fun notReadyMessage(context: Context): String? = when {
+         isServiceRunning() -> null
+         isServiceEnabledInSettings(context) -> "Android Automation's accessibility service is turned on but not running. " +
+-            "Ask the user to turn \"AntiGem Android Automation\" off and on again in Android Settings → Accessibility, then reconnect this MCP server."
+-        else -> "Android Automation is not set up. Ask the user to open AntiGem → Settings → Android Automation and grant the permissions there " +
++            "Ask the user to turn \"CodeNexus Android Automation\" off and on again in Android Settings → Accessibility, then reconnect this MCP server."
++        else -> "Android Automation is not set up. Ask the user to open CodeNexus → Settings → Android Automation and grant the permissions there " +
+             "(the Accessibility service; on Android 13+ they may first need App info → ⋮ → Allow restricted settings). Then reconnect this MCP server."
+     }
+ 
+@@ -786,7 +786,7 @@
+ 
+     private suspend fun uninstall(context: Context, svc: AutomationAccessibilityService, args: JSONObject): JSONObject {
+         val pkg = packageArg(args)
+-        if (pkg == context.packageName) return error("Refusing to uninstall AntiGem itself.")
++        if (pkg == context.packageName) return error("Refusing to uninstall CodeNexus itself.")
+         val device = AdbConnectManager.ensureConnected()
+         if (device != null) {
+             val keep = if (args.optBoolean("keep_data")) "-k " else ""
+diff --git a/app/src/main/java/com/example/gemini/data/remote/CustomSlashCommands.kt b/app/src/main/java/com/example/gemini/data/remote/CustomSlashCommands.kt
+--- a/app/src/main/java/com/example/gemini/data/remote/CustomSlashCommands.kt
++++ b/app/src/main/java/com/example/gemini/data/remote/CustomSlashCommands.kt
+@@ -49,8 +49,8 @@
+                 If that is empty or unclear, first ask the user what to do and on which website, then continue.
+ 
+                 1. Check that you have the Browser Automation MCP: its tools start with browser_ (server browser_mcp), such as browser_open_url, browser_screenshot, browser_inspect_dom and browser_interact. It might not be added for this agent yet. If you don't have these tools, stop and tell the user how to add it:
+-                   - Antigravity: open AntiGem → Settings → MCP Servers & Tools, tap the "Browser Automation" preset under Quick Presets, and save.
+-                   - Claude Code: open AntiGem → Settings → Claude Code → MCP servers, and tap the "Browser Automation" preset.
++                   - Antigravity: open CodeNexus → Settings → MCP Servers & Tools, tap the "Browser Automation" preset under Quick Presets, and save.
++                   - Claude Code: open CodeNexus → Settings → Claude Code → MCP servers, and tap the "Browser Automation" preset.
+                    - Then reload the tools or start a new chat, and send this command again.
+                    Don't try to do the task another way while the tools are missing.
+                 2. Open the page with browser_open_url, then look before you act: browser_inspect_dom for the elements and selectors, browser_screenshot to see the page.
+@@ -67,8 +67,8 @@
+                 If that is empty or unclear, first ask the user what they want done, then continue.
+ 
+                 1. Check that you have the Android Automation MCP: its tools start with android_ (server android_automation_mcp), such as android_get_ui_tree, android_screenshot and android_tap. It might not be set up yet. If you don't have these tools, or they return an error saying a permission is missing, stop and tell the user how to set it up:
+-                   - Allow it: open AntiGem → Settings → Android Automation, tap "Open Accessibility" and turn on "AntiGem Android Automation". On Android 13+, if the switch is greyed out ("Restricted setting"), tap "Open App info" on that page, then ⋮ (top right) → Allow restricted settings, and try again. If ADB is connected, "Turn on with ADB" on that page does it in one tap.
+-                   - Optional: for key presses, installing, uninstalling, force-stopping apps and adb shell commands, connect ADB in AntiGem → Settings → ADB Connect.
++                   - Allow it: open CodeNexus → Settings → Android Automation, tap "Open Accessibility" and turn on "CodeNexus Android Automation". On Android 13+, if the switch is greyed out ("Restricted setting"), tap "Open App info" on that page, then ⋮ (top right) → Allow restricted settings, and try again. If ADB is connected, "Turn on with ADB" on that page does it in one tap.
++                   - Optional: for key presses, installing, uninstalling, force-stopping apps and adb shell commands, connect ADB in CodeNexus → Settings → ADB Connect.
+                    - Add the MCP. For Antigravity: Settings → MCP Servers & Tools, tap the "Android Automation" preset, and save. For Claude Code: Settings → Claude Code → MCP servers, and tap the "Android Automation" preset.
+                    - Then reload the tools or start a new chat, and send this command again.
+                    Don't try to do the task another way while the tools are missing.

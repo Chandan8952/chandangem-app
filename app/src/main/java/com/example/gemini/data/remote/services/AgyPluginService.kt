@@ -194,7 +194,11 @@ class AgyPluginService(
                             envMap["LD_PRELOAD"] = "/data/data/com.termux/files/usr/lib/libtermux-exec.so"
                         }
                         if (!envMap.containsKey("PATH")) {
-                            envMap["PATH"] = "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin"
+                            envMap["PATH"] = if (java.io.File("/data/data/com.termux/files/usr/lib/libtermux-exec.so").exists())
+                                "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin"
+                            else
+                                // Ubuntu container build: the servers run inside the container, so they need its PATH
+                                "/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
                         }
                     }
 

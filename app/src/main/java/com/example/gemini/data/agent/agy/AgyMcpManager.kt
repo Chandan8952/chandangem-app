@@ -294,11 +294,17 @@ class AgyMcpManager(
                             // Ensure Termux stdio binaries (npx, python3, etc.) have proper loader and PATH on Android.
                             // A server runs the MCP on its own Linux: those Termux paths would break it there.
                             if (!AuthPreferences.currentRemoteMode) {
-                                if (!envMap.containsKey("LD_PRELOAD")) {
-                                    envMap["LD_PRELOAD"] = "/data/data/com.termux/files/usr/lib/libtermux-exec.so"
-                                }
-                                if (!envMap.containsKey("PATH")) {
-                                    envMap["PATH"] = "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin"
+                                val termuxExec = java.io.File("/data/data/com.termux/files/usr/lib/libtermux-exec.so").exists()
+                                if (termuxExec) {
+                                    if (!envMap.containsKey("LD_PRELOAD")) {
+                                        envMap["LD_PRELOAD"] = "/data/data/com.termux/files/usr/lib/libtermux-exec.so"
+                                    }
+                                    if (!envMap.containsKey("PATH")) {
+                                        envMap["PATH"] = "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin"
+                                    }
+                                } else if (!envMap.containsKey("PATH")) {
+                                    // Ubuntu container build: the servers run inside the container, so they need its PATH
+                                    envMap["PATH"] = "/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
                                 }
                             }
                             if (envMap.isNotEmpty()) {

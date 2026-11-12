@@ -49,8 +49,8 @@ object CustomSlashCommands {
                 If that is empty or unclear, first ask the user what to do and on which website, then continue.
 
                 1. Check that you have the Browser Automation MCP: its tools start with browser_ (server browser_mcp), such as browser_open_url, browser_screenshot, browser_inspect_dom and browser_interact. It might not be added for this agent yet. If you don't have these tools, stop and tell the user how to add it:
-                   - Antigravity: open AntiGem → Settings → MCP Servers & Tools, tap the "Browser Automation" preset under Quick Presets, and save.
-                   - Claude Code: open AntiGem → Settings → Claude Code → MCP servers, and tap the "Browser Automation" preset.
+                   - Antigravity: open CodeNexus → Settings → MCP Servers & Tools, tap the "Browser Automation" preset under Quick Presets, and save.
+                   - Claude Code: open CodeNexus → Settings → Claude Code → MCP servers, and tap the "Browser Automation" preset.
                    - Then reload the tools or start a new chat, and send this command again.
                    Don't try to do the task another way while the tools are missing.
                 2. Open the page with browser_open_url, then look before you act: browser_inspect_dom for the elements and selectors, browser_screenshot to see the page.
@@ -67,8 +67,8 @@ object CustomSlashCommands {
                 If that is empty or unclear, first ask the user what they want done, then continue.
 
                 1. Check that you have the Android Automation MCP: its tools start with android_ (server android_automation_mcp), such as android_get_ui_tree, android_screenshot and android_tap. It might not be set up yet. If you don't have these tools, or they return an error saying a permission is missing, stop and tell the user how to set it up:
-                   - Allow it: open AntiGem → Settings → Android Automation, tap "Open Accessibility" and turn on "AntiGem Android Automation". On Android 13+, if the switch is greyed out ("Restricted setting"), tap "Open App info" on that page, then ⋮ (top right) → Allow restricted settings, and try again. If ADB is connected, "Turn on with ADB" on that page does it in one tap.
-                   - Optional: for key presses, installing, uninstalling, force-stopping apps and adb shell commands, connect ADB in AntiGem → Settings → ADB Connect.
+                   - Allow it: open CodeNexus → Settings → Android Automation, tap "Open Accessibility" and turn on "CodeNexus Android Automation". On Android 13+, if the switch is greyed out ("Restricted setting"), tap "Open App info" on that page, then ⋮ (top right) → Allow restricted settings, and try again. If ADB is connected, "Turn on with ADB" on that page does it in one tap.
+                   - Optional: for key presses, installing, uninstalling, force-stopping apps and adb shell commands, connect ADB in CodeNexus → Settings → ADB Connect.
                    - Add the MCP. For Antigravity: Settings → MCP Servers & Tools, tap the "Android Automation" preset, and save. For Claude Code: Settings → Claude Code → MCP servers, and tap the "Android Automation" preset.
                    - Then reload the tools or start a new chat, and send this command again.
                    Don't try to do the task another way while the tools are missing.
