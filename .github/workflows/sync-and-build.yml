@@ -1,0 +1,84 @@
+name: Sync Upstream & Build
+
+on:
+  schedule:
+    - cron: "0 3 * * *"   # daily 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ChandanGem
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/Chandan8952/antigem.git 2>/dev/null || true
+          git fetch upstream
+
+      - name: Sync upstream source (preserve branding)
+        run: |
+          # Pull upstream into a temp worktree approach: rsync all source except branding
+          UPSTREAM_DIR=/tmp/antigem_upstream
+          git clone --depth 1 https://github.com/Chandan8952/antigem.git "$UPSTREAM_DIR"
+          # Backup branding
+          mkdir -p /tmp/branding
+          cp app/build.gradle.kts /tmp/branding/
+          cp app/src/main/AndroidManifest.xml /tmp/branding/
+          cp app/src/main/res/values/strings.xml /tmp/branding/ 2>/dev/null || true
+          cp -r app/src/main/res/mipmap-anydpi-v26 /tmp/branding/ 2>/dev/null || true
+          cp app/src/main/res/drawable/ic_launcher_foreground.xml /tmp/branding/ 2>/dev/null || true
+          cp app/src/main/res/drawable/ic_launcher_background.xml /tmp/branding/ 2>/dev/null || true
+          # Sync source
+          rsync -av --delete \
+            --exclude='ic_launcher*' --exclude='ic_termux_launcher*' \
+            --exclude='strings.xml' --exclude='colors.xml' \
+            --exclude='AndroidManifest.xml' --exclude='build.gradle.kts' \
+            "$UPSTREAM_DIR/app/src/main/" "app/src/main/"
+          # Restore branding
+          cp /tmp/branding/build.gradle.kts app/build.gradle.kts
+          cp /tmp/branding/AndroidManifest.xml app/src/main/AndroidManifest.xml
+          cp /tmp/branding/strings.xml app/src/main/res/values/strings.xml 2>/dev/null || true
+          cp -r /tmp/branding/mipmap-anydpi-v26/. app/src/main/res/mipmap-anydpi-v26/ 2>/dev/null || true
+          cp /tmp/branding/ic_launcher_foreground.xml app/src/main/res/drawable/ 2>/dev/null || true
+          cp /tmp/branding/ic_launcher_background.xml app/src/main/res/drawable/ 2>/dev/null || true
+
+      - name: Commit if changes
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No upstream changes."
+          else
+            git commit -m "sync: upstream AntiGem update (branding preserved)"
+            git push origin master
+          fi
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.22
+
+      - name: Build Release APK
+        run: |
+          chmod +x gradlew scripts/build_all_apks.sh
+          ./scripts/build_all_apks.sh --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: chandangem-apk
+          path: output/*.apk

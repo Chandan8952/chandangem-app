@@ -1,4 +1,4 @@
-# ChandanGem App
+# CodeNexus App
 
 > **Engineered & Owned by Chandan Kumar**  
 > An autonomous multi-agent AI assistant for Android with Jetpack Compose, native hands-free voice loop, Termux terminal management, and Model Context Protocol (MCP) tool integration.

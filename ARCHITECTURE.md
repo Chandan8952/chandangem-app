@@ -1,4 +1,4 @@
-# Architecture Documentation: ChandanGem Application Suite
+# Architecture Documentation: CodeNexus Application Suite
 
 **Project Owner**: Chandan Kumar  
 **Target Platform**: Android (minSdk 26, targetSdk 35) + Termux Linux Environment  
