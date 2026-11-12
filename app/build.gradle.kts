@@ -94,7 +94,7 @@ android {
     }
 
     base {
-        archivesName.set("ChandanGem")
+        archivesName.set("CodeNexus")
     }
 
     compileOptions {

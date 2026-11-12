@@ -1,11 +1,12 @@
 {
   "version_code": 132,
-  "version_name": "1.1.12",
+  "version_name": "1.2.0",
   "min_supported_version_code": 1,
   "changelog": [
-    "Rebranded completely to CodeNexus across all build flavors",
-    "App icon preserved (unchanged) across updates",
-    "Standalone package com.codenexus.app"
+    "Official CodeNexus Standalone Release (100% AntiGem clone with custom branding)",
+    "Rebranded Application Name to CodeNexus (com.codenexus.app)",
+    "Exclusive Quantum Core & Cyber Shield vector launcher icon",
+    "All AI agent tools, voice engines, bridge, and MCP plugins fully active and working"
   ],
   "is_critical": false
 }
