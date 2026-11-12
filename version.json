@@ -1,10 +1,11 @@
 {
-  "version_code": 134,
-  "version_name": "1.2.2",
+  "version_code": 135,
+  "version_name": "1.2.3",
   "min_supported_version_code": 1,
   "changelog": [
-    "Fixed: app crashed on launch because the release build was missing the full ProGuard/R8 keep rules (classes were stripped)",
-    "Restored the full AntiGem ProGuard rules, so every feature is compiled in again",
+    "Fixed: 'Node.js is required in the local terminal to run browser extensions' error on the plugin pages",
+    "The plugin host now starts with the Node.js inside the Ubuntu container (through proot), with the runtime and plugin folders bound into it",
+    "The fix is re-applied automatically after every daily upstream sync",
     "Launcher icon is the original AntiGem prism gem, app name stays CodeNexus",
     "Updates install over the previous version without uninstalling (stable signing key)"
   ],

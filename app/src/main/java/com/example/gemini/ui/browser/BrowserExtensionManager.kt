@@ -193,20 +193,11 @@ class BrowserExtensionManager private constructor() {
                 throw IllegalStateException(e.message ?: "The browser-plugin host could not start on the server", e)
             }
         } else if (hostProcess?.isAlive != true) {
-            val node = File(LocalEnvironmentManager.getBinDir(context), "node")
-            if (!node.canExecute()) throw IllegalStateException("Node.js is required in the local terminal to run browser extensions")
-            val command = mutableListOf(node.absolutePath, "--experimental-vm-modules", runtimeFile(context).absolutePath,
-                "--serve", "--port", hostPort().toString(), "--root", File(context.filesDir, "browser-extensions").absolutePath,
-                "--device-id", deviceId(), "--bridge-url", "http://127.0.0.1:${com.example.gemini.data.remote.AndroidLocalBridgeServer.instance.boundPort}")
-            getExtensionsDirectories(context).filter { it != File(context.filesDir, "browser-extensions") }.forEach {
-                if (it.isDirectory) command.addAll(listOf("--extra-root", it.absolutePath))
-            }
+            val launch = planHostLaunch(context)
+                ?: throw IllegalStateException("Node.js is required in the local terminal to run browser extensions")
+            val command = launch.command
             val builder = ProcessBuilder(command).directory(LocalEnvironmentManager.getHomeDir(context)).redirectErrorStream(true)
-            builder.environment().putAll(mapOf("HOME" to LocalEnvironmentManager.getHomeDir(context).absolutePath,
-                "PREFIX" to LocalEnvironmentManager.getPrefixDir(context).absolutePath,
-                "PATH" to "${LocalEnvironmentManager.getBinDir(context).absolutePath}:/system/bin",
-                "TMPDIR" to LocalEnvironmentManager.getTmpDir(context).absolutePath,
-                "AGY_PARENT_PID" to android.os.Process.myPid().toString()))
+            builder.environment().putAll(launch.env)
             // Everything the host prints, plus its exit code, goes to ~/extension-host.log so a failing phone can be diagnosed.
             val logFile = File(LocalEnvironmentManager.getHomeDir(context), "extension-host.log")
             synchronized(hostTail) { hostTail.clear() }
@@ -244,6 +235,105 @@ class BrowserExtensionManager private constructor() {
         }
         throw IllegalStateException("Extension host did not start in time")
     } }
+
+    /** How the extension host is started: with the app's own Node.js, or with the Node.js inside the Linux container. */
+    private class HostLaunch(val command: List<String>, val env: Map<String, String>)
+
+    /**
+     * Builds the command that starts the plugin host.
+     *
+     * On Termux builds Node.js sits in the app's own prefix, so the host starts directly. On Android builds Node.js
+     * only exists inside the Ubuntu container (a glibc binary), so the host is started there through proot: the app's
+     * runtime and plugin folders are bound into the container and the host keeps talking to the app over 127.0.0.1.
+     */
+    private fun planHostLaunch(context: Context): HostLaunch? {
+        val runtime = runtimeFile(context)
+        val extensionsRoot = File(context.filesDir, "browser-extensions")
+        val extraRoots = getExtensionsDirectories(context).filter { it != extensionsRoot && it.isDirectory }
+        val bridgeUrl = "http://127.0.0.1:${com.example.gemini.data.remote.AndroidLocalBridgeServer.instance.boundPort}"
+
+        val node = File(LocalEnvironmentManager.getBinDir(context), "node")
+        if (node.canExecute()) {
+            val command = mutableListOf(node.absolutePath, "--experimental-vm-modules", runtime.absolutePath,
+                "--serve", "--port", hostPort().toString(), "--root", extensionsRoot.absolutePath,
+                "--device-id", deviceId(), "--bridge-url", bridgeUrl)
+            extraRoots.forEach { command.addAll(listOf("--extra-root", it.absolutePath)) }
+            return HostLaunch(command, mapOf(
+                "HOME" to LocalEnvironmentManager.getHomeDir(context).absolutePath,
+                "PREFIX" to LocalEnvironmentManager.getPrefixDir(context).absolutePath,
+                "PATH" to "${LocalEnvironmentManager.getBinDir(context).absolutePath}:/system/bin",
+                "TMPDIR" to LocalEnvironmentManager.getTmpDir(context).absolutePath,
+                "AGY_PARENT_PID" to android.os.Process.myPid().toString()))
+        }
+
+        // Android build: Node.js lives inside the Ubuntu container.
+        if (LocalEnvironmentManager.isTermuxPackage(context) || !LocalEnvironmentManager.isUbuntuInstalled(context)) return null
+        val ubuntuDir = LocalEnvironmentManager.getUbuntuRootDir(context)
+        val guestNode = File(ubuntuDir, "usr/bin/node")
+        if (!guestNode.exists()) return null
+
+        val files = context.filesDir.absolutePath
+        val home = LocalEnvironmentManager.getHomeDir(context)
+        // Host folder -> guest folder. The guest paths stay under /root, which the host's own file sandbox allows.
+        val mounts = listOf(
+            File(files, "browser-runtime") to "/root/antigem-runtime",
+            File(files, "browser-extensions") to "/root/antigem-extensions",
+            File(files, "extensions") to "/root/antigem-ext",
+            File(files, "projects") to "/root/antigem-projects",
+            home to "/root/workspace")
+        val bound = mounts.filter { it.first.exists() }
+        fun guestPath(file: File): String? {
+            val path = file.absolutePath
+            val mount = bound.filter { path == it.first.absolutePath || path.startsWith(it.first.absolutePath + File.separator) }
+                .maxByOrNull { it.first.absolutePath.length } ?: return null
+            return mount.second + path.removePrefix(mount.first.absolutePath)
+        }
+        val guestRuntime = guestPath(runtime.parentFile!!)?.plus("/${runtime.name}") ?: return null
+        val guestExtensions = guestPath(extensionsRoot) ?: return null
+
+        val prootTmpDir = File(files, "tmp").apply { mkdirs() }
+        val shmDir = File(files, "shm").apply { mkdirs() }
+        val command = mutableListOf(
+            LocalEnvironmentManager.getProotBinaryPath(context),
+            "--kill-on-exit", "--link2symlink", "--sysvipc",
+            "--kernel-release=\\Linux\\localhost\\6.1.0\\2026.08\\aarch64\\localdomain\\-1\\",
+            "-L", "--change-id=0:0",
+            "--rootfs=${ubuntuDir.absolutePath}", "--cwd=/root",
+            "--bind=/dev", "--bind=/proc", "--bind=/sys", "--bind=/dev/urandom:/dev/random",
+            "--bind=${shmDir.absolutePath}:/dev/shm", "--bind=${prootTmpDir.absolutePath}:/tmp")
+        LocalEnvironmentManager.setupFakeSysdata(context).forEach { (fakeFile, guestTarget) ->
+            command.add("--bind=${fakeFile.absolutePath}:$guestTarget")
+        }
+        listOf("/apex", "/odm", "/product", "/system", "/system_ext", "/vendor",
+            "/plat_property_contexts", "/property_contexts").forEach { hostPath ->
+            if (File(hostPath).exists()) { command.add("-b"); command.add(hostPath) }
+        }
+        if (File("/storage").exists() && File("/storage").canRead()) { command.add("-b"); command.add("/storage") }
+        if (File("/storage/emulated/0").exists()) { command.add("-b"); command.add("/storage/emulated/0:/sdcard") }
+        else if (File("/sdcard").exists()) { command.add("-b"); command.add("/sdcard") }
+        bound.forEach { (host, guest) -> command.add("--bind=${host.absolutePath}:$guest") }
+
+        command.addAll(listOf("/usr/bin/env", "-i", "HOME=/root", "USER=root", "LOGNAME=root",
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "TERM=xterm-256color", "LANG=C.UTF-8", "TMPDIR=/tmp",
+            "AGY_PARENT_PID=${android.os.Process.myPid()}",
+            "/usr/bin/node", "--experimental-vm-modules", guestRuntime,
+            "--serve", "--port", hostPort().toString(), "--root", guestExtensions,
+            "--device-id", deviceId(), "--bridge-url", bridgeUrl))
+        extraRoots.forEach { dir ->
+            val guest = guestPath(dir) ?: dir.absolutePath.takeIf { it.startsWith("/sdcard/") }
+            if (guest != null) command.addAll(listOf("--extra-root", guest))
+        }
+        return HostLaunch(command, mapOf(
+            "HOME" to "/root",
+            "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "TMPDIR" to "/tmp",
+            "PROOT_LOADER" to LocalEnvironmentManager.getProotLoaderPath(context),
+            "PROOT_TMP_DIR" to prootTmpDir.absolutePath,
+            "LD_LIBRARY_PATH" to "$files/lib:$files/bin",
+            "DEBIAN_FRONTEND" to "noninteractive",
+            "AGY_PARENT_PID" to android.os.Process.myPid().toString()))
+    }
 
     suspend fun request(path: String, body: JSONObject = JSONObject()) = withContext(Dispatchers.IO) {
         ensureHost()

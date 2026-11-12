@@ -76,6 +76,23 @@ jobs:
           mkdir -p app/src/main/res/drawable-xxxhdpi
           cp /tmp/branding/splash_logo.webp app/src/main/res/drawable-xxxhdpi/ 2>/dev/null || true
 
+      - name: Re-apply CodeNexus patches
+        run: |
+          set -e
+          shopt -s nullglob
+          patches=(codenexus/patches/*.patch)
+          if [ ${#patches[@]} -eq 0 ]; then
+            echo "No CodeNexus patches to apply."
+            exit 0
+          fi
+          for p in "${patches[@]}"; do
+            if git apply --whitespace=nowarn "$p"; then
+              echo "applied $p"
+            else
+              echo "::warning::CodeNexus patch $p did not apply to the updated upstream source (skipped)."
+            fi
+          done
+
       - name: Bump version and commit
         id: bump
         run: |
