@@ -1,4 +1,4 @@
-name: Sync Upstream & Build
+name: Sync Upstream & Release
 
 on:
   schedule:
@@ -8,77 +8,155 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
 jobs:
-  sync-and-build:
+  sync-and-release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout ChandanGem
+      - name: Checkout CodeNexus
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Add upstream remote
+      - name: Clone upstream AntiGem
         run: |
-          git remote add upstream https://github.com/Chandan8952/antigem.git 2>/dev/null || true
-          git fetch upstream
+          git clone --depth 1 https://github.com/Chandan8952/antigem.git /tmp/upstream
+          echo "UPSTREAM_SHA=$(git -C /tmp/upstream rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          {
+            echo "UPSTREAM_MSG<<EOF"
+            git -C /tmp/upstream log -1 --pretty=%s
+            echo "EOF"
+          } >> "$GITHUB_ENV"
 
-      - name: Sync upstream source (preserve branding)
+      - name: Sync upstream source, keep CodeNexus branding
         run: |
-          # Pull upstream into a temp worktree approach: rsync all source except branding
-          UPSTREAM_DIR=/tmp/antigem_upstream
-          git clone --depth 1 https://github.com/Chandan8952/antigem.git "$UPSTREAM_DIR"
-          # Backup branding
+          set -e
           mkdir -p /tmp/branding
           cp app/build.gradle.kts /tmp/branding/
           cp app/src/main/AndroidManifest.xml /tmp/branding/
           cp app/src/main/res/values/strings.xml /tmp/branding/ 2>/dev/null || true
+          cp app/src/main/res/values/colors.xml /tmp/branding/ 2>/dev/null || true
           cp -r app/src/main/res/mipmap-anydpi-v26 /tmp/branding/ 2>/dev/null || true
           cp app/src/main/res/drawable/ic_launcher_foreground.xml /tmp/branding/ 2>/dev/null || true
           cp app/src/main/res/drawable/ic_launcher_background.xml /tmp/branding/ 2>/dev/null || true
-          # Sync source
-          rsync -av --delete \
-            --exclude='ic_launcher*' --exclude='ic_termux_launcher*' \
-            --exclude='strings.xml' --exclude='colors.xml' \
-            --exclude='AndroidManifest.xml' --exclude='build.gradle.kts' \
-            "$UPSTREAM_DIR/app/src/main/" "app/src/main/"
-          # Restore branding
+          cp app/src/main/res/drawable-xxxhdpi/splash_logo.webp /tmp/branding/ 2>/dev/null || true
+
+          rsync -a --delete \
+            --exclude='ic_launcher*' \
+            --exclude='ic_termux_launcher*' \
+            --exclude='splash_logo.webp' \
+            --exclude='strings.xml' \
+            --exclude='colors.xml' \
+            --exclude='AndroidManifest.xml' \
+            --exclude='assets/bin/agy_ide_bridge.xz' \
+            --exclude='assets/bin/backup_bootstrap' \
+            --exclude='assets/bin/backup_chats' \
+            --exclude='assets/bin/restore_chats' \
+            /tmp/upstream/app/src/main/ app/src/main/
+
+          # Build files that carry upstream fixes (branding stays in app/build.gradle.kts)
+          for f in app/proguard-rules.pro build.gradle.kts settings.gradle.kts gradle/libs.versions.toml; do
+            if [ -f "/tmp/upstream/$f" ]; then cp "/tmp/upstream/$f" "$f"; fi
+          done
+          if [ -d /tmp/upstream/agy_ide_bridge ]; then
+            rsync -a --delete /tmp/upstream/agy_ide_bridge/ agy_ide_bridge/
+          fi
+
+          # Restore CodeNexus branding (name, package, prism icon)
           cp /tmp/branding/build.gradle.kts app/build.gradle.kts
           cp /tmp/branding/AndroidManifest.xml app/src/main/AndroidManifest.xml
           cp /tmp/branding/strings.xml app/src/main/res/values/strings.xml 2>/dev/null || true
+          cp /tmp/branding/colors.xml app/src/main/res/values/colors.xml 2>/dev/null || true
           cp -r /tmp/branding/mipmap-anydpi-v26/. app/src/main/res/mipmap-anydpi-v26/ 2>/dev/null || true
           cp /tmp/branding/ic_launcher_foreground.xml app/src/main/res/drawable/ 2>/dev/null || true
           cp /tmp/branding/ic_launcher_background.xml app/src/main/res/drawable/ 2>/dev/null || true
+          mkdir -p app/src/main/res/drawable-xxxhdpi
+          cp /tmp/branding/splash_logo.webp app/src/main/res/drawable-xxxhdpi/ 2>/dev/null || true
 
-      - name: Commit if changes
+      - name: Bump version and commit
+        id: bump
         run: |
-          git config user.email "actions@github.com"
-          git config user.name "GitHub Actions"
           git add -A
           if git diff --cached --quiet; then
             echo "No upstream changes."
-          else
-            git commit -m "sync: upstream AntiGem update (branding preserved)"
-            git push origin master
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
+          python3 - <<'PY'
+          import json, os
+          p = 'version.json'
+          d = json.load(open(p))
+          old = str(d.get('version_name', '1.0.0'))
+          parts = (old.split('.') + ['0', '0', '0'])[:3]
+          parts = [int(x) if str(x).isdigit() else 0 for x in parts]
+          parts[2] += 1
+          new = '.'.join(str(x) for x in parts)
+          d['version_name'] = new
+          d['version_code'] = int(d.get('version_code', 1)) + 1
+          d['changelog'] = [
+              f"Upstream AntiGem update merged ({os.environ.get('UPSTREAM_SHA', '')})",
+              os.environ.get('UPSTREAM_MSG', '').strip(),
+              "CodeNexus name and the original AntiGem prism icon are preserved",
+          ]
+          with open(p, 'w') as f:
+              json.dump(d, f, indent=2)
+              f.write('\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"version_name={new}\n")
+              f.write(f"version_code={d['version_code']}\n")
+          print('bumped to', new, d['version_code'])
+          PY
+
+          git config user.email "actions@github.com"
+          git config user.name "CodeNexus Sync"
+          git add -A
+          git commit -m "sync: upstream AntiGem ${UPSTREAM_SHA} (branding preserved)"
+          git push origin master
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
       - name: Set up Java 21
+        if: steps.bump.outputs.changed == 'true'
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: 21
+          distribution: 'temurin'
+          java-version: '21'
 
       - name: Set up Go
+        if: steps.bump.outputs.changed == 'true'
         uses: actions/setup-go@v5
         with:
-          go-version: 1.22
+          go-version: '1.22'
 
-      - name: Build Release APK
+      - name: Setup Gradle
+        if: steps.bump.outputs.changed == 'true'
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Restore Keystore from Secret
+        if: steps.bump.outputs.changed == 'true'
+        run: |
+          if [ -n "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > app/release.jks
+          else
+            keytool -genkeypair -v -keystore app/release.jks -alias antigem -keyalg RSA -keysize 2048 -validity 10000 -storepass 123456 -keypass 123456 -dname "CN=AntiGem, OU=App, O=AntiGem, L=Global, S=Global, C=US"
+          fi
+
+      - name: Build Release APKs
+        if: steps.bump.outputs.changed == 'true'
         run: |
           chmod +x gradlew scripts/build_all_apks.sh
           ./scripts/build_all_apks.sh --release
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: Publish GitHub Release
+        if: steps.bump.outputs.changed == 'true'
+        uses: softprops/action-gh-release@v2
         with:
-          name: chandangem-apk
-          path: output/*.apk
+          tag_name: v${{ steps.bump.outputs.version_name }}
+          name: v${{ steps.bump.outputs.version_name }}
+          generate_release_notes: true
+          files: output/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
