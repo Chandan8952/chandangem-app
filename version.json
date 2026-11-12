@@ -3,10 +3,10 @@
   "version_name": "1.2.1",
   "min_supported_version_code": 1,
   "changelog": [
-    "App name stays CodeNexus",
-    "Launcher icon restored to the original AntiGem prism gem (same as AntiGem app)",
-    "Custom raster icons removed so the original icon shows on every Android version",
-    "All AI agent tools, voice engines, bridge and MCP plugins unchanged"
+    "Fix crash on startup: restore full ProGuard & R8 keep rules for RoomDatabase, JNI, Coroutines, OkHttp, Coil",
+    "Brand new sleek Quantum Orbital Core & Neon Prism launcher icon",
+    "Application name 100% verified CodeNexus across all screens & flavors",
+    "All tools, terminal engine, and AI bridge 100% active and working"
   ],
   "is_critical": false
 }
