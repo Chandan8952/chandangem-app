@@ -16,3 +16,8 @@ captures
 *.apk
 *.aab
 local.properties
+
+# local build/signing artifacts
+keys/
+dist/
+ci-watch.log
